@@ -528,6 +528,60 @@ void JoinImpl::hashJoin(const IdTable& dynA, ColumnIndex jc1,
 }
 
 // ___________________________________________________________________________
+Result JoinImpl::hashJoinNew(std::shared_ptr<const Result> left,
+                             ColumnIndex jcLeft,
+                             std::shared_ptr<const Result> right,
+                             ColumnIndex jcRight, bool leftIsSmaller) {
+  // Build Map from smaller Input
+  auto small = leftIsSmaller ? left : right;
+  auto large = leftIsSmaller ? right : left;
+  auto jcSmall = leftIsSmaller ? jcLeft : jcRight;
+  auto jcLarge = leftIsSmaller ? jcRight : jcLeft;
+  // Build Hash Map using the smaller result.
+  ad_utility::HashMap<Id, std::vector<IdTable::row_type>> map;
+  auto buildHashMap = [&map, jcSmall](const auto& table) {
+    for (const auto& row : table) {
+      map[row[jcSmall]].push_back(row);
+    }
+  };
+  // both fully materialized and lazy tables are supported
+  if (small->isFullyMaterialized()) {
+    buildHashMap(small->idTable());
+  } else {
+    for (const auto& table : small->idTables()) {
+      buildHashMap(table.idTable_);
+    }
+  }
+  // Probing phase: check for matching rows in the larger table
+  IdTable result{getResultWidth(), allocator()};
+  auto probeRow = [&map, jcLarge, jcSmall, leftIsSmaller,
+                   &result](const auto& table) {
+    for (const auto& row : table) {
+      auto entry = map.find(row[jcLarge]);
+      if (entry != map.end()) {
+        for (const auto& rowSmall : entry->second) {
+          if (leftIsSmaller) {
+            addCombinedRowToIdTable(rowSmall, row, jcLarge, &result);
+          } else {
+            addCombinedRowToIdTable(row, rowSmall, jcSmall, &result);
+          }
+        }
+      }
+    }
+  };
+  // both fully materialized and lazy tables are supported
+  if (large->isFullyMaterialized()) {
+    probeRow(large->idTable());
+  } else {
+    for (const auto& table : large->idTables()) {
+      probeRow(table.idTable_);
+    }
+  }
+  return Result{std::move(result), resultSortedOn(),
+                Result::getMergedLocalVocab(*small, *large)};
+}
+
+// ___________________________________________________________________________
 template <typename ROW_A, typename ROW_B, int TABLE_WIDTH>
 void JoinImpl::addCombinedRowToIdTable(const ROW_A& rowA, const ROW_B& rowB,
                                        ColumnIndex jcRowB,

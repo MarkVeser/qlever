@@ -106,6 +106,7 @@ void runTestCasesForAllJoinAlgorithms(
 
   // All normal join algorithm defined as lambda functions for easier handing
   // over to helper functions.
+  auto newHashJoinLambda = makeNewHashJoinLambda();
   auto hashJoinLambda = makeHashJoinLambda();
   auto joinLambda = makeJoinLambda();
 
@@ -126,6 +127,7 @@ void runTestCasesForAllJoinAlgorithms(
     testCase.resultMustBeSortedByJoinColumn = false;
   });
   goThroughSetOfTestsWithJoinFunction(testSet, hashJoinLambda);
+  goThroughSetOfTestsWithJoinFunction(testSet, newHashJoinLambda);
 
   // Sort the larger table by join column, run hashJoin, check result (this time
   // it's sorted).
@@ -139,6 +141,7 @@ void runTestCasesForAllJoinAlgorithms(
     testCase.resultMustBeSortedByJoinColumn = true;
   });
   goThroughSetOfTestsWithJoinFunction(testSet, hashJoinLambda);
+  goThroughSetOfTestsWithJoinFunction(testSet, newHashJoinLambda);
 
   // Sort both tables, run merge join and hash join, check result. (Which has to
   // be sorted.)
@@ -149,6 +152,7 @@ void runTestCasesForAllJoinAlgorithms(
   });
   goThroughSetOfTestsWithJoinFunction(testSet, joinLambda);
   goThroughSetOfTestsWithJoinFunction(testSet, hashJoinLambda);
+  goThroughSetOfTestsWithJoinFunction(testSet, newHashJoinLambda);
 }
 
 /*

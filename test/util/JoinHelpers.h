@@ -66,6 +66,33 @@ inline auto makeHashJoinLambda() {
 }
 
 /*
+ * @brief Returns a lambda for calling `JoinImpl::hashJoinNew` via
+ *  `ad_utility::callFixedSize`.
+ */
+inline auto makeNewHashJoinLambda() {
+  return ad_utility::ApplyAsValueIdentity{
+      [](auto /*valueIdentityA*/, auto /*valueIdentityB*/,
+         auto /*valueIdentityC*/, const IdTable& a, ColumnIndex jc1,
+         const IdTable& b, ColumnIndex jc2, IdTable* result) {
+        std::vector<std::optional<Variable>> leftVariables{{Variable{"?x"}}};
+        leftVariables.resize(a.numColumns());
+        std::vector<std::optional<Variable>> rightVariables{{Variable{"?x"}}};
+        rightVariables.resize(b.numColumns());
+        bool leftIsSmaller = a.size() <= b.size();
+        auto* qec = ad_utility::testing::getQec();
+        auto leftTree = ad_utility::makeExecutionTree<ValuesForTesting>(
+            qec, a.clone(), std::move(leftVariables), false, std::vector{jc1});
+        auto rightTree = ad_utility::makeExecutionTree<ValuesForTesting>(
+            qec, b.clone(), std::move(rightVariables), false, std::vector{jc2});
+        JoinImpl join{qec, leftTree, rightTree, jc1, jc2, true, false};
+        auto joinResult =
+            join.hashJoinNew(leftTree->getResult(), jc1, rightTree->getResult(),
+                             jc2, leftIsSmaller);
+        *result = joinResult.idTable().clone();
+      }};
+}
+
+/*
  * @brief Returns a lambda for calling `Join::join` via
  *  `ad_utility::callFixedSize`.
  */

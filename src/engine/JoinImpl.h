@@ -113,6 +113,15 @@ class JoinImpl : public Operation {
   static void hashJoin(const IdTable& dynA, ColumnIndex jc1,
                        const IdTable& dynB, ColumnIndex jc2, IdTable* dynRes);
 
+  /**
+   * @brief leftIsSmaller determines which of the two results is used for
+   * building the hash map. Left/Right destinction is important for the
+   * order of the columns in the result.
+   **/
+  Result hashJoinNew(std::shared_ptr<const Result> left, ColumnIndex jcLeft,
+                     std::shared_ptr<const Result> right, ColumnIndex jcRight,
+                     bool leftIsSmaller = true);
+
   virtual std::string getCacheKeyImpl() const override;
   std::unique_ptr<Operation> cloneImpl() const override;
   Result computeResult(bool requestLaziness) override;
