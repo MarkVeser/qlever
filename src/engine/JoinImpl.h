@@ -187,6 +187,13 @@ class JoinImpl : public Operation {
                            const IdTable& dynB, ColumnIndex jc2,
                            IdTable* dynRes);
 
+  // New Hash Join implementation
+  Result hashJoinNew();
+
+  // Helper functions for new hash join implementation
+  std::vector<IdTable> createEmptyPartitions(bool leftIsSmaller);
+  void fillPartitions(std::vector<IdTable>& partitions, bool leftIsSmaller);
+
   // Commonly used code for the various known-to-be-empty cases.
   Result createEmptyResult() const;
 

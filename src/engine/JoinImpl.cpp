@@ -533,6 +533,87 @@ void JoinImpl::hashJoin(const IdTable& dynA, ColumnIndex jc1,
       });
 }
 
+std::vector<IdTable> JoinImpl::createEmptyPartitions(bool leftIsSmaller) {
+  // +1, since hash value is saved in partition variable, saved per row
+  // Add later: Manager for External Memory
+  // Rebuild if biggest partitions hash map doesn't fit in memory
+  // Außer wenn die größte Partition bereits >= 80% aller Daten ausmacht
+  // Davor noch versuchen, den Faktor auf 1.5 zu reduzieren, erst dann Repartionieren
+  // Variable, welche Zustand der Partitionen speichert
+  auto numCols =
+      1 + (leftIsSmaller ? left_->getResultWidth() : right_->getResultWidth());
+  std::vector<IdTable> partitions;
+  for (size_t i = 0; i < 16; ++i) {
+    partitions.emplace_back(IdTable(numCols, allocator()));
+  }
+  return partitions;
+}
+
+// ___________________________________________________________________________
+void JoinImpl::fillPartitions(std::vector<IdTable>& partitions,
+                              bool leftIsSmaller) {
+  auto joinCol = leftIsSmaller ? leftJoinCol_ : rightJoinCol_;
+  const auto& smallerResult =
+      leftIsSmaller ? left_->getResult() : right_->getResult();
+
+  // helper lambda function, welche mir die Ergebnisse abarbeitet
+  // for each row calculate hash value and write row to corresponding partition
+  auto processTable = [&partitions, joinCol](const auto& table) {
+    for (const auto& row : table) {
+      // check memory limit before adding new row to partition
+      auto hashValue = absl::HashOf(row[joinCol]);
+      auto partitionIndex = getPartitionIndex(hashValue, partitions.size());
+      auto& target = partitions[partitionIndex];
+      target.emplace_back();
+      target.back()[0] = hashValue;
+      for (size_t i = 1; i < target.numColumns(); ++i) {
+        target.back()[i] = row[i - 1];
+      }
+    }
+  };
+
+  // unterscheidung nach lazy / f.m.
+  if (smallerResult->isFullyMaterialized()) {
+    processTable(smallerResult->idTableView());
+  } else {
+    for (const auto& table : smallerResult->idTables()) {
+      processTable(table->idTableView());
+    }
+  }
+}
+
+// ___________________________________________________________________________
+Result JoinImpl::hashJoinNew() {
+  // aktuelle Tests sind eigentlich ungünstig, da diese immer von fully
+  // materialized inputs ausgehen ich will ja eben auch den hash join mit lazy
+  // auch testen können. Deshalb muss ich mir was überlegen, wie ich die
+  // bestehenden Tests auch mit einem lazy hash join, welcher result verwendet
+  // testen kann.
+
+  // phase 1: define smaller result and create empty partition variable
+  bool leftIsSmaller = left_->getSizeEstimate() <= right_->getSizeEstimate();
+  auto partitions = createEmptyPartitions(leftIsSmaller);
+
+  // phase 2: iterate smaller result
+  // -> while hashing and partitioning row by row
+  // -> while monitoring the size of partitions / managing memory consumption
+  // -> while also using the final partition size to define size of hash map
+  // or rather the number of buckets 
+  // Duck DB: partition.size * factor -> round up to next Zweierpotenz
+  // Factor: Internal: 2.0, External: 1.5
+  fillPartitions(partitions, leftIsSmaller);
+
+  // phase 3: repeat until finished
+  // -> build hash map from in ram partition
+  // -> iterate over probe side, save probe side rows that belong to other
+  // partitions
+  // -> TODO: wie mache ich den Durchlauf, sodass er einmal auf den Input und
+  // dann auf die gespeicherten Partitionen geht?
+  // -> end of probe side: load next partition, repeat phase 3 until no
+  // partition left
+  return createEmptyResult();
+}
+
 // ___________________________________________________________________________
 template <typename ROW_A, typename ROW_B, int TABLE_WIDTH>
 void JoinImpl::addCombinedRowToIdTable(const ROW_A& rowA, const ROW_B& rowB,
