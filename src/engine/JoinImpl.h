@@ -38,6 +38,8 @@ class JoinImpl : public Operation {
   // If set to false, the join column will not be part of the result.
   bool keepJoinColumn_ = true;
 
+  uint8_t numRadixBits_ = 4;
+
  public:
   // `allowSwappingChildrenOnlyForTesting` should only ever be changed by tests.
   JoinImpl(QueryExecutionContext* qec, std::shared_ptr<QueryExecutionTree> t1,
@@ -192,7 +194,9 @@ class JoinImpl : public Operation {
 
   // Helper functions for new hash join implementation
   std::vector<IdTable> createEmptyPartitions(bool leftIsSmaller);
-  void fillPartitions(std::vector<IdTable>& partitions, bool leftIsSmaller);
+  size_t getPartitionIndex(uint64_t hashValue) const;
+  void fillPartitions(std::vector<IdTable>& partitions,
+                      LocalVocab& mergedLocalVocab, bool leftIsSmaller);
 
   // Commonly used code for the various known-to-be-empty cases.
   Result createEmptyResult() const;

@@ -533,24 +533,38 @@ void JoinImpl::hashJoin(const IdTable& dynA, ColumnIndex jc1,
       });
 }
 
+namespace {
+// upper 16 bits
+constexpr uint8_t numSaltBits = 16;
+}  // namespace
+
 std::vector<IdTable> JoinImpl::createEmptyPartitions(bool leftIsSmaller) {
   // +1, since hash value is saved in partition variable, saved per row
   // Add later: Manager for External Memory
   // Rebuild if biggest partitions hash map doesn't fit in memory
   // Außer wenn die größte Partition bereits >= 80% aller Daten ausmacht
-  // Davor noch versuchen, den Faktor auf 1.5 zu reduzieren, erst dann Repartionieren
-  // Variable, welche Zustand der Partitionen speichert
+  // Davor noch versuchen, den Faktor auf 1.5 zu reduzieren, erst dann
+  // Repartionieren Variable, welche Zustand der Partitionen speichert
   auto numCols =
       1 + (leftIsSmaller ? left_->getResultWidth() : right_->getResultWidth());
   std::vector<IdTable> partitions;
-  for (size_t i = 0; i < 16; ++i) {
+  for (auto i = 0; i < numRadixBits_; ++i) {
     partitions.emplace_back(IdTable(numCols, allocator()));
   }
   return partitions;
 }
 
 // ___________________________________________________________________________
+size_t JoinImpl::getPartitionIndex(uint64_t hashValue) const {
+  uint8_t bitShift = 64 - numRadixBits_ - numSaltBits;
+  // remove bucket bits from below and salt bits from above
+  return (hashValue >> bitShift) &
+         ad_utility::bitMaskForLowerBits(numRadixBits_);
+}
+
+// ___________________________________________________________________________
 void JoinImpl::fillPartitions(std::vector<IdTable>& partitions,
+                              LocalVocab& mergedLocalVocab,
                               bool leftIsSmaller) {
   auto joinCol = leftIsSmaller ? leftJoinCol_ : rightJoinCol_;
   const auto& smallerResult =
@@ -558,11 +572,11 @@ void JoinImpl::fillPartitions(std::vector<IdTable>& partitions,
 
   // helper lambda function, welche mir die Ergebnisse abarbeitet
   // for each row calculate hash value and write row to corresponding partition
-  auto processTable = [&partitions, joinCol](const auto& table) {
+  auto processTable = [this, &partitions, joinCol](const auto& table) {
     for (const auto& row : table) {
       // check memory limit before adding new row to partition
       auto hashValue = absl::HashOf(row[joinCol]);
-      auto partitionIndex = getPartitionIndex(hashValue, partitions.size());
+      uint64_t partitionIndex = getPartitionIndex(hashValue);
       auto& target = partitions[partitionIndex];
       target.emplace_back();
       target.back()[0] = hashValue;
@@ -575,9 +589,11 @@ void JoinImpl::fillPartitions(std::vector<IdTable>& partitions,
   // unterscheidung nach lazy / f.m.
   if (smallerResult->isFullyMaterialized()) {
     processTable(smallerResult->idTableView());
+    mergedLocalVocab.merge(smallerResult->localVocab());
   } else {
-    for (const auto& table : smallerResult->idTables()) {
-      processTable(table->idTableView());
+    for (const auto& pair : smallerResult->idTables()) {
+      processTable(pair.idTable_);
+      mergedLocalVocab.merge(pair.localVocab_);
     }
   }
 }
@@ -593,24 +609,38 @@ Result JoinImpl::hashJoinNew() {
   // phase 1: define smaller result and create empty partition variable
   bool leftIsSmaller = left_->getSizeEstimate() <= right_->getSizeEstimate();
   auto partitions = createEmptyPartitions(leftIsSmaller);
+  auto mergedLocalVocab = LocalVocab{};
 
   // phase 2: iterate smaller result
   // -> while hashing and partitioning row by row
   // -> while monitoring the size of partitions / managing memory consumption
-  // -> while also using the final partition size to define size of hash map
-  // or rather the number of buckets 
-  // Duck DB: partition.size * factor -> round up to next Zweierpotenz
-  // Factor: Internal: 2.0, External: 1.5
-  fillPartitions(partitions, leftIsSmaller);
+  fillPartitions(partitions, mergedLocalVocab, leftIsSmaller);
 
   // phase 3: repeat until finished
-  // -> build hash map from in ram partition
-  // -> iterate over probe side, save probe side rows that belong to other
-  // partitions
-  // -> TODO: wie mache ich den Durchlauf, sodass er einmal auf den Input und
-  // dann auf die gespeicherten Partitionen geht?
-  // -> end of probe side: load next partition, repeat phase 3 until no
-  // partition left
+  // variables for loop
+  auto result = ...;
+  while (true) {
+    // using the final partition size to define size of hash map
+    // or rather the number of buckets
+    // Duck DB: partition.size * factor -> round up to next Zweierpotenz
+    // Factor: Internal: 2.0, External: 1.5
+    // calculate row size of loaded partitions
+    uint8_t bucketSize =calculateBucketSize(partitions);
+
+    // -> build hash map from in ram partition
+    auto hashMap = ...;
+    buildHashMap(hashMap, partitions, bucketSize);
+
+    // -> iterate over probe side, save probe side rows that belong to other
+    // partitions
+    probeHashMap(hashMap, partitions, bucketSize, result);
+    clearPartitionFromRam(partitions);
+
+    // -> TODO: wie mache ich den Durchlauf, sodass er einmal auf den Input und
+    // dann auf die gespeicherten Partitionen geht?
+    // -> end of probe side: load next partition, repeat phase 3 until no
+    // partition left
+  }
   return createEmptyResult();
 }
 
