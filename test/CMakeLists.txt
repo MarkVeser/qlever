@@ -196,6 +196,8 @@ addLinkAndDiscoverTestNoLibs(SortedSequenceTest)
 
 addLinkAndDiscoverTest(RebuildIndexStrategyTest qlever_util)
 
+addLinkAndDiscoverTest(KeepPreviousIndexDirsTest qlever)
+
 addLinkAndDiscoverTest(DeltaTriplesTest index)
 
 addLinkAndDiscoverTest(UpdateMetadataTest index)
@@ -375,6 +377,8 @@ if (NOT _DISABLE_EMSCRIPTEN_PROBLEMATIC_TESTS)
     addLinkAndDiscoverTest(HttpTest Boost::iostreams http)
 endif ()
 
+addLinkAndDiscoverTest(HttpProxyConfigTest http)
+
 addLinkAndDiscoverTestNoLibs(CallFixedSizeTest)
 
 addLinkAndDiscoverTestNoLibs(ConstexprUtilsTest)
@@ -547,6 +551,8 @@ else ()
 endif ()
 
 addLinkAndDiscoverTest(MaterializedViewsStarRewriteTest qlever engine)
+
+addLinkAndDiscoverTest(MaterializedViewsCacheKeyRewriteTest qlever engine)
 
 addLinkAndDiscoverTestNoLibs(ConstexprMapTest)
 

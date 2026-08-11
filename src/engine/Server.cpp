@@ -62,6 +62,7 @@ Server::Server(
       noAccessCheck_(noAccessCheck),
       queryThreadPool_{numThreads},
       rebuildIndexStrategy_(config.rebuildIndexStrategy_),
+      keepPreviousIndexDirs_(config.keepPreviousIndexDirs_),
       metricsReader_(std::move(metricsReader)) {
   AD_LOG_INFO << "Initializing server ..." << std::endl;
 
@@ -391,7 +392,8 @@ void Server::configurePinnedResultWithName(
     return;
   }
   if (!accessTokenOk) {
-    throw std::runtime_error(
+    throw HttpError(
+        http::status::forbidden,
         "Pinning a result with a name requires a valid access token");
   }
   auto getGeoCacheVar = [&]() -> std::optional<Variable> {
@@ -446,14 +448,15 @@ CPP_template_def(typename RequestT, typename ResponseT)(
   // throw an exception and do not process any part of the query (even if the
   // processing had been allowed without access token).
   bool accessTokenOk = checkAccessToken(parsedHttpRequest.accessToken_);
-  auto requireValidAccessToken = [&accessTokenOk](
-                                     const std::string& actionName) {
-    if (!accessTokenOk) {
-      throw std::runtime_error(absl::StrCat(
-          actionName,
-          " requires a valid access token but no access token was provided"));
-    }
-  };
+  auto requireValidAccessToken =
+      [&accessTokenOk](const std::string& actionName) {
+        if (!accessTokenOk) {
+          throw HttpError(http::status::forbidden,
+                          absl::StrCat(actionName,
+                                       " requires a valid access token but no "
+                                       "access token was provided"));
+        }
+      };
 
   // Process all URL parameters known to QLever. If there is more than one,
   // QLever processes all of them, but only returns the result from the last
@@ -639,7 +642,8 @@ CPP_template_def(typename RequestT, typename ResponseT)(
         parameters, "view-name");
     AD_CONTRACT_CHECK(name.has_value());
 
-    indexAndViews->materializedViewsManager_.loadView(name.value());
+    auto qec = qlever().createQueryExecutionContext(indexAndViews);
+    indexAndViews->materializedViewsManager_.loadView(name.value(), qec.get());
 
     // Construct simple response JSON.
     nlohmann::json json{{"materialized-view-loaded", name.value()}};
@@ -1495,7 +1499,6 @@ CPP_template_def(typename VisitorT, typename RequestT, typename ResponseT)(
   } catch (const std::exception& e) {
     responseStatus = http::status::internal_server_error;
     exceptionErrorMsg = e.what();
-    // TODO<qup42> this includes missing/wrong access token which should be 403
     metrics_->sparqlErrors_->Add(1, {SparqlErrorType::internal});
   }
   // TODO<qup42> at this stage should probably have a wrapper that takes
@@ -1583,12 +1586,14 @@ bool Server::checkAccessToken(
   }
   const auto accessTokenProvidedMsg = "Access token was provided";
   if (accessToken_.empty()) {
-    throw std::runtime_error(
+    throw HttpError(
+        http::status::forbidden,
         absl::StrCat(accessTokenProvidedMsg,
                      " but server was started without --access-token"));
   } else if (!ad_utility::constantTimeEquals(accessToken.value(),
                                              accessToken_)) {
-    throw std::runtime_error(
+    throw HttpError(
+        http::status::forbidden,
         absl::StrCat(accessTokenProvidedMsg, " but it was invalid"));
   } else {
     AD_LOG_DEBUG << accessTokenProvidedMsg << " and correct" << std::endl;
@@ -1702,8 +1707,14 @@ Awaitable<qlever::IndexRebuildConfig> Server::rebuildIndex(
         // it is only written from this very executor, which has a single
         // thread.
         oldManager.retireOnDiskFiles();
+        // The swap also applies the configured policy for which `previous.*`
+        // index directories to keep. Deleting a directory there blocks this
+        // single-threaded executor for a bit, but the swap blocks updates
+        // anyway, and doing it in the same step avoids an extra executor
+        // hop. A cleanup failure is only logged; it does not fail the
+        // request, because the new index is already in place.
         qlever().swapInRebuiltIndex(index, std::move(rebuildResult), handle,
-                                    config);
+                                    config, keepPreviousIndexDirs_);
         auto now = std::chrono::duration_cast<std::chrono::seconds>(
                        std::chrono::system_clock::now().time_since_epoch())
                        .count();
